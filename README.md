@@ -61,10 +61,17 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 3. **Status**:
    - 左側のサイドバーで配送進捗率（Delivery Progress）を確認できます。
 
-## 技術的な詳細
-- **Backend**: FastAPI (Python)
-- **Frontend**: Vanilla JS + HTML5 Canvas (Single File)
-- **Solver**: OpenJij (Simulated Annealing) + Dimod (BQM Construction)
-- **Algorithm**: Multi-Agent Vehicle Routing Problem (VRP) formulated as QUBO.
+## 使用技術スタック (Tech Stack)
+
+*   **バックエンド**: FastAPI (Python)
+    *   非同期処理による高速なWebサーバーとWebSocket通信の実装に使用。
+*   **フロントエンド**: Vanilla JavaScript + HTML5 Canvas
+    *   フレームワーク（React等）への依存を排除し、多数のエージェントをリアルタイムに描画するための軽量実装。
+*   **量子アニーリング / 最適化**: OpenJij, dimod
+    *   QUBOモデルの構築とシミュレーテッド・アニーリングによる解探索に使用。
+*   **主要ライブラリ**: NumPy, Uvicorn, Websockets
+
+### アルゴリズム詳細
+- **Multi-Agent Vehicle Routing Problem (VRP) formulated as QUBO.**
   - 変数: $x_{k,t,i}$ (エージェント $k$ が ステップ $t$ で 目的地 $i$ を訪問するか)
   - 制約: 各目的地は必ず1回訪問される / 同時刻に1人のエージェントは1箇所しか訪問できない 等
