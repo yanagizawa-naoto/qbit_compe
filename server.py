@@ -182,136 +182,108 @@ def solve_full_vrp_qubo(targets: List[int], active_drivers: List[str]) -> Dict[s
     """
     Solves Multi-Agent VRP completely using QUBO.
     Decides BOTH assignment (clustering) AND routing (TSP) in one giant BQM.
+    Now with Closed Loop (Return to Depot) Optimization!
     """
     num_drivers = len(active_drivers)
     num_targets = len(targets)
     if num_drivers == 0 or num_targets == 0: return {}
 
-    print(f"  [QUBO VRP] Solving for {num_drivers} agents, {num_targets} targets...")
-    
-    # 1. Prepare Nodes Mapping
-    # Logic: Each agent has T steps.
-    # We fix step 0 to be the current location of the agent.
-    # We optimize from step 1 to num_targets.
-    # To save variables, we assume total steps = num_targets (worst case one agent does all).
-    # But usually we can cap steps at ceil(num_targets / num_drivers) + buffer.
+    print(f"  [QUBO VRP] Solving for {num_drivers} agents, {num_targets} targets (Closed Loop)...")
     
     max_steps_per_agent = max(2, int(num_targets * 0.8) + 1)
-    # Total limit for safety. If variables > ~2000 it gets too slow.
-    # Variables ~ Agents * Steps * Targets
     
     bqm = dimod.BinaryQuadraticModel.empty(dimod.BINARY)
     
-    # Coordinates for penalty calculation
+    # Coordinates
     target_points = {t: game.points[t] for t in targets}
     agent_starts = {aid: game.points[game.agents[aid].idx] for aid in active_drivers}
-    
-    # Precompute distances
-    # dist_matrix[u][v]
-    all_indices = targets + [game.agents[aid].idx for aid in active_drivers] + [game.depot_index]
-    all_indices = list(set(all_indices))
     
     def get_dist(i, j):
         p1 = game.points[i]; p2 = game.points[j]
         return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
 
-    # Variables: x_{k, t, i} -> Agent k visits Target i at Step t
-    # k: 0..num_drivers-1
-    # t: 0..max_steps_per_agent-1 (0 is first move from start)
-    # i: 0..num_targets-1 (index in targets list)
-    
     def var(k, t, i): return f"x_{k}_{t}_{i}"
     
-    A = 5000.0  # Constraint Penalty (High)
-    B = 1.0     # Distance Weight (Low)
+    A = 5000.0
+    B = 1.0
     
-    # Constraint 1: Every target i must be visited exactly once by ANY agent at ANY step
+    # Constraints are same: Visit Once, No Multitasking
     for i in range(num_targets):
-        # sum_{k,t} x_{k,t,i} == 1
-        # Terms: -A * x + 2A * pair
         vars_for_i = []
         for k in range(num_drivers):
             for t in range(max_steps_per_agent):
                 v = var(k, t, i)
                 vars_for_i.append(v)
                 bqm.add_variable(v, -A)
-        
         for idx1 in range(len(vars_for_i)):
             for idx2 in range(idx1 + 1, len(vars_for_i)):
                 bqm.add_interaction(vars_for_i[idx1], vars_for_i[idx2], 2 * A)
 
-    # Constraint 2: Each agent k at step t can visit at most one target
     for k in range(num_drivers):
         for t in range(max_steps_per_agent):
-            # sum_{i} x_{k,t,i} <= 1
-            # We use a slack variable or penalty for >1. 
-            # Ideally = 1 if we forced full coverage, but maybe they stop early?
-            # Actually, let's allow "No Move" (dummy node)?
-            # To simplify, we enforce: sum_{i} x_{k,t,i} <= 1. 
-            # Penalty: sum(pairs) * 2A. No linear term change?
-            # Incorrect. (sum x)^2 = sum x^2 + pairs. 
-            # If we want sum <= 1, we penalize pairs only.
-            
             vars_for_step = [var(k, t, i) for i in range(num_targets)]
             for idx1 in range(len(vars_for_step)):
                 for idx2 in range(idx1 + 1, len(vars_for_step)):
                     bqm.add_interaction(vars_for_step[idx1], vars_for_step[idx2], 2 * A)
 
-    # Objective: Minimize Distance
+    # Objective: Minimize Distance (Closed Loop: Start -> ... -> End -> Depot)
+    depot_idx = game.depot_index
+    
     for k in range(num_drivers):
         aid = active_drivers[k]
         start_node = game.agents[aid].idx
         
-        # Step 0: From Start -> Target i
+        # 1. Base Linear Term: Pay cost to return home from any node.
+        # This correctly adds d(i, depot) for the LAST node in the sequence.
+        for t in range(max_steps_per_agent):
+            for i in range(num_targets):
+                dist_to_home = get_dist(targets[i], depot_idx)
+                bqm.add_variable(var(k, t, i), dist_to_home * B)
+
+        # 2. Step 0: Initial move cost (Start -> Target i)
         for i in range(num_targets):
-            dist = get_dist(start_node, targets[i])
-            bqm.add_variable(var(k, 0, i), dist * B)
+            dist_start_i = get_dist(start_node, targets[i])
+            bqm.add_variable(var(k, 0, i), dist_start_i * B)
             
-        # Step t -> t+1: Target i -> Target j
+        # 3. Transitions: Target i -> Target j
+        # If we move i -> j, i was not last. Cancel i's return cost.
+        # Net weight = dist(i, j) - dist(i, home)
         for t in range(max_steps_per_agent - 1):
             for i in range(num_targets):
+                dist_i_home = get_dist(targets[i], depot_idx)
                 for j in range(num_targets):
                     if i == j: continue
-                    dist = get_dist(targets[i], targets[j])
-                    # Interaction: if x_{k,t,i} AND x_{k,t+1,j} are 1, add dist
-                    bqm.add_interaction(var(k, t, i), var(k, t+1, j), dist * B)
+                    dist_i_j = get_dist(targets[i], targets[j])
+                    
+                    weight = (dist_i_j - dist_i_home) * B
+                    bqm.add_interaction(var(k, t, i), var(k, t+1, j), weight)
 
     # Solve
     try:
         sampler = oj.SASampler()
         start_time = time.time()
-        response = sampler.sample(bqm, num_reads=1, num_sweeps=100) # Fast anneal
+        response = sampler.sample(bqm, num_reads=1, num_sweeps=100)
         print(f"  [QUBO VRP] Optimized in {time.time() - start_time:.3f}s")
         
         sample = response.first.sample
-        
-        # Decode
         final_routes = {aid: [] for aid in active_drivers}
         
         for k in range(num_drivers):
             aid = active_drivers[k]
-            # Extract sequence (t, i)
             steps = []
             for key, val in sample.items():
                 if val > 0 and key.startswith(f"x_{k}_"):
                     _, k_str, t_str, i_str = key.split('_')
                     steps.append((int(t_str), int(i_str)))
-            
-            # Sort by step
             steps.sort(key=lambda x: x[0])
-            
-            # Convert to target IDs
             route = []
             for _, i_idx in steps:
                 if i_idx < len(targets):
                     route.append(targets[i_idx])
-            
-            # Append return to depot
             route.append(game.depot_index)
             final_routes[aid] = route
             
         return final_routes
-        
     except Exception as e:
         print(f"  [QUBO Error] {e}")
         return {aid: [game.depot_index] for aid in active_drivers}
@@ -323,12 +295,7 @@ def solve_vrp_internally():
     if not targets: return {aid: [game.depot_index] for aid in game.agents}
     
     active_drivers = list(game.agents.keys())
-    
-    # Use Full QUBO Solver
-    # Note: If target count is huge, this might lag.
     if len(targets) > 12:
-        # Emergency fallback to slicing simply to prevent crash, 
-        # but user asked for QUBO, so we try our best or slice.
         print("  [Warning] Targets > 12. Slicing for safety.")
         targets = targets[:12]
 
@@ -356,7 +323,6 @@ async def cpu_simulation_loop():
                         updates.append({"id": cpu.id, "idx": next_node})
                     
             if updates:
-                # Re-solve VRP completely on every move
                 routes = solve_vrp_internally()
                 await manager.broadcast({
                     "type": "batch_update",
@@ -410,7 +376,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 
             elif msg["type"] == "regenerate":
                 p_count = int(msg.get("points", 100))
-                # FORCE 8 destinations for QUBO stability
                 game.regenerate(p_count, 8) 
                 await manager.broadcast({
                     "type": "init",
