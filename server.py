@@ -50,9 +50,8 @@ class GameState:
         self.suggested_routes: Dict[str, List[int]] = {} 
         self.status: str = "LOBBY"
         
-        # Reduced default count for "Full QUBO" performance
         self.num_points = 80
-        self.num_destinations = 8  # Kept small for Full VRP QUBO real-time solving
+        self.num_destinations = 8
         self.k_neighbors = 4
         
         self.generate_map()
@@ -88,8 +87,8 @@ class GameState:
         coords = np.array([[p.x, p.y] for p in self.points])
         
         for i in range(self.num_points):
-            dists = np.sum((coords - coords[i])**2, axis=1)
-            nearest = np.argsort(dists)[1:self.k_neighbors+1]
+            dists_arr = np.sum((coords - coords[i])**2, axis=1)
+            nearest = np.argsort(dists_arr)[1:self.k_neighbors+1]
             for neighbor in nearest:
                 if neighbor not in self.edges[i]:
                     self.edges[i].append(int(neighbor))
@@ -176,154 +175,301 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- FULL VRP QUBO Solver ---
+# =============================================================================
+# IMPROVED QUBO VRP SOLVER (Two-Phase: Assignment + TSP)
+# =============================================================================
 
-def solve_full_vrp_qubo(targets: List[int], active_drivers: List[str]) -> Dict[str, List[int]]:
+def get_euclidean_dist(idx1: int, idx2: int) -> float:
+    """Get Euclidean distance between two point indices."""
+    p1, p2 = game.points[idx1], game.points[idx2]
+    return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
+
+
+def solve_assignment_qubo(targets: List[int], drivers: List[str]) -> Dict[str, List[int]]:
     """
-    Solves Multi-Agent VRP completely using QUBO.
-    Decides BOTH assignment (clustering) AND routing (TSP) in one giant BQM.
-    Now with Closed Loop (Return to Depot) Optimization!
+    Phase 1: Assign each target to a driver using QUBO.
+    Minimizes total distance from each driver's current position to assigned targets,
+    while balancing the load.
     """
-    num_drivers = len(active_drivers)
     num_targets = len(targets)
-    if num_drivers == 0 or num_targets == 0: return {}
-
-    print(f"  [QUBO VRP] Solving for {num_drivers} agents, {num_targets} targets (Closed Loop)...")
+    num_drivers = len(drivers)
     
-    max_steps_per_agent = max(2, int(num_targets * 0.8) + 1)
+    if num_drivers == 0: return {}
+    if num_targets == 0: return {d: [] for d in drivers}
+    
+    # If only one driver, assign all to them
+    if num_drivers == 1:
+        return {drivers[0]: targets[:]}
     
     bqm = dimod.BinaryQuadraticModel.empty(dimod.BINARY)
     
-    # Coordinates
-    target_points = {t: game.points[t] for t in targets}
-    agent_starts = {aid: game.points[game.agents[aid].idx] for aid in active_drivers}
+    def var(k, i): return f"y_{k}_{i}"
     
-    def get_dist(i, j):
-        p1 = game.points[i]; p2 = game.points[j]
-        return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
-
-    def var(k, t, i): return f"x_{k}_{t}_{i}"
+    A = 10000.0  # Constraint weight (exactly one driver per target)
+    B = 1.0      # Distance weight
+    C = 500.0    # Load balancing weight
     
-    A = 5000.0
-    B = 10.0
-    
-    # Constraints are same: Visit Once, No Multitasking
+    # Constraint: Each target assigned to exactly one driver (One-Hot)
     for i in range(num_targets):
-        vars_for_i = []
-        for k in range(num_drivers):
-            for t in range(max_steps_per_agent):
-                v = var(k, t, i)
-                vars_for_i.append(v)
-                bqm.add_variable(v, -A)
-        for idx1 in range(len(vars_for_i)):
-            for idx2 in range(idx1 + 1, len(vars_for_i)):
-                bqm.add_interaction(vars_for_i[idx1], vars_for_i[idx2], 2 * A)
-
-    for k in range(num_drivers):
-        for t in range(max_steps_per_agent):
-            vars_for_step = [var(k, t, i) for i in range(num_targets)]
-            for idx1 in range(len(vars_for_step)):
-                for idx2 in range(idx1 + 1, len(vars_for_step)):
-                    bqm.add_interaction(vars_for_step[idx1], vars_for_step[idx2], 2 * A)
-
-    # Objective: Minimize Distance (Closed Loop: Start -> ... -> End -> Depot)
-    depot_idx = game.depot_index
+        vars_i = [var(k, i) for k in range(num_drivers)]
+        # Sum = 1 constraint: -A * x + A * x_i * x_j (for i != j)
+        for v in vars_i:
+            bqm.add_variable(v, -A)
+        for idx1 in range(len(vars_i)):
+            for idx2 in range(idx1 + 1, len(vars_i)):
+                bqm.add_interaction(vars_i[idx1], vars_i[idx2], 2 * A)
     
+    # Objective: Minimize distance from driver's current pos to target
     for k in range(num_drivers):
-        aid = active_drivers[k]
-        start_node = game.agents[aid].idx
-        
-        # 1. Base Linear Term: Pay cost to return home from any node.
-        # This correctly adds d(i, depot) for the LAST node in the sequence.
-        for t in range(max_steps_per_agent):
-            for i in range(num_targets):
-                dist_to_home = get_dist(targets[i], depot_idx)
-                bqm.add_variable(var(k, t, i), dist_to_home * B)
-
-        # 2. Step 0: Initial move cost (Start -> Target i)
+        driver_pos = game.agents[drivers[k]].idx
         for i in range(num_targets):
-            dist_start_i = get_dist(start_node, targets[i])
-            bqm.add_variable(var(k, 0, i), dist_start_i * B)
-            
-        # 3. Transitions: Target i -> Target j
-        # If we move i -> j, i was not last. Cancel i's return cost.
-        # Net weight = dist(i, j) - dist(i, home)
-        for t in range(max_steps_per_agent - 1):
-            for i in range(num_targets):
-                dist_i_home = get_dist(targets[i], depot_idx)
-                for j in range(num_targets):
-                    if i == j: continue
-                    dist_i_j = get_dist(targets[i], targets[j])
-                    
-                    weight = (dist_i_j - dist_i_home) * B
-                    bqm.add_interaction(var(k, t, i), var(k, t+1, j), weight)
-
+            dist = get_euclidean_dist(driver_pos, targets[i])
+            bqm.add_variable(var(k, i), dist * B)
+    
+    # Load Balancing: Penalize assigning too many targets to one driver
+    # Encourage each driver to have ~ num_targets / num_drivers targets
+    ideal_load = num_targets / num_drivers
+    for k in range(num_drivers):
+        vars_k = [var(k, i) for i in range(num_targets)]
+        # Add quadratic penalty for having many targets (quadratic growth)
+        for idx1 in range(len(vars_k)):
+            for idx2 in range(idx1 + 1, len(vars_k)):
+                bqm.add_interaction(vars_k[idx1], vars_k[idx2], C / num_targets)
+    
     # Solve
-    try:
-        sampler = oj.SASampler()
-        start_time = time.time()
-        response = sampler.sample(bqm, num_reads=1, num_sweeps=100)
-        print(f"  [QUBO VRP] Optimized in {time.time() - start_time:.3f}s")
-        
-        sample = response.first.sample
-        final_routes = {aid: [] for aid in active_drivers}
-        
-        for k in range(num_drivers):
-            aid = active_drivers[k]
-            steps = []
-            for key, val in sample.items():
-                if val > 0 and key.startswith(f"x_{k}_"):
-                    _, k_str, t_str, i_str = key.split('_')
-                    steps.append((int(t_str), int(i_str)))
-            steps.sort(key=lambda x: x[0])
-            route = []
-            for _, i_idx in steps:
-                if i_idx < len(targets):
-                    route.append(targets[i_idx])
-            route.append(game.depot_index)
-            final_routes[aid] = route
-            
-        return final_routes
-    except Exception as e:
-        print(f"  [QUBO Error] {e}")
-        return {aid: [game.depot_index] for aid in active_drivers}
+    sampler = oj.SASampler()
+    response = sampler.sample(bqm, num_reads=5, num_sweeps=200)
+    sample = response.first.sample
+    
+    # Parse result
+    assignment = {d: [] for d in drivers}
+    for k in range(num_drivers):
+        for i in range(num_targets):
+            if sample.get(var(k, i), 0) > 0:
+                assignment[drivers[k]].append(targets[i])
+    
+    # Fallback: If any target not assigned, assign to nearest driver
+    assigned_targets = set()
+    for tlist in assignment.values():
+        assigned_targets.update(tlist)
+    
+    for i, t in enumerate(targets):
+        if t not in assigned_targets:
+            # Find nearest driver
+            best_k = 0
+            best_dist = float('inf')
+            for k, d in enumerate(drivers):
+                dist = get_euclidean_dist(game.agents[d].idx, t)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_k = k
+            assignment[drivers[best_k]].append(t)
+    
+    return assignment
+
+
+def solve_tsp_qubo_closed_loop(driver_id: str, targets: List[int]) -> List[int]:
+    """
+    Phase 2: Solve TSP for a single driver's assigned targets.
+    Returns optimal visit order as a list of target indices, ending with depot.
+    Uses Position-based TSP QUBO formulation for closed loop.
+    """
+    depot = game.depot_index
+    start_pos = game.agents[driver_id].idx
+    
+    if len(targets) == 0:
+        return [depot]
+    
+    if len(targets) == 1:
+        return [targets[0], depot]
+    
+    # For small problems, use QUBO. For larger, use greedy.
+    if len(targets) > 8:
+        # Greedy nearest neighbor for performance
+        route = []
+        current = start_pos
+        remaining = set(targets)
+        while remaining:
+            nearest = min(remaining, key=lambda t: get_euclidean_dist(current, t))
+            route.append(nearest)
+            remaining.remove(nearest)
+            current = nearest
+        route.append(depot)
+        return route
+    
+    # ------- QUBO TSP (Position-based) -------
+    n = len(targets)
+    bqm = dimod.BinaryQuadraticModel.empty(dimod.BINARY)
+    
+    def var(i, p): return f"z_{i}_{p}"
+    
+    A = 10000.0  # Constraint weight
+    B = 1.0      # Distance weight
+    
+    # Constraint 1: Each target visited exactly once (row constraint)
+    for i in range(n):
+        vars_row = [var(i, p) for p in range(n)]
+        for v in vars_row:
+            bqm.add_variable(v, -A)
+        for idx1 in range(len(vars_row)):
+            for idx2 in range(idx1 + 1, len(vars_row)):
+                bqm.add_interaction(vars_row[idx1], vars_row[idx2], 2 * A)
+    
+    # Constraint 2: Each position has exactly one target (column constraint)
+    for p in range(n):
+        vars_col = [var(i, p) for i in range(n)]
+        for v in vars_col:
+            bqm.add_variable(v, -A)
+        for idx1 in range(len(vars_col)):
+            for idx2 in range(idx1 + 1, len(vars_col)):
+                bqm.add_interaction(vars_col[idx1], vars_col[idx2], 2 * A)
+    
+    # Objective: Minimize total distance
+    # Distance: Start -> position 0
+    for i in range(n):
+        dist = get_euclidean_dist(start_pos, targets[i])
+        bqm.add_variable(var(i, 0), dist * B)
+    
+    # Distance: position p -> position p+1
+    for p in range(n - 1):
+        for i in range(n):
+            for j in range(n):
+                if i == j: continue
+                dist = get_euclidean_dist(targets[i], targets[j])
+                bqm.add_interaction(var(i, p), var(j, p + 1), dist * B)
+    
+    # Distance: position n-1 (last) -> depot (return home)
+    for i in range(n):
+        dist = get_euclidean_dist(targets[i], depot)
+        bqm.add_variable(var(i, n - 1), dist * B)
+    
+    # Solve
+    sampler = oj.SASampler()
+    response = sampler.sample(bqm, num_reads=10, num_sweeps=500)
+    sample = response.first.sample
+    
+    # Parse result: Find which target is at each position
+    route = [None] * n
+    for i in range(n):
+        for p in range(n):
+            if sample.get(var(i, p), 0) > 0:
+                if route[p] is None:
+                    route[p] = targets[i]
+    
+    # Fallback for missing positions
+    assigned = set(r for r in route if r is not None)
+    missing = [t for t in targets if t not in assigned]
+    for p in range(n):
+        if route[p] is None and missing:
+            route[p] = missing.pop(0)
+    
+    # Remove any None and add depot
+    route = [r for r in route if r is not None]
+    route.append(depot)
+    
+    return route
+
+
+def solve_vrp_two_phase(targets: List[int], drivers: List[str]) -> Dict[str, List[int]]:
+    """
+    Main VRP Solver: Two-Phase QUBO approach.
+    Phase 1: Assign targets to drivers (Clustering QUBO)
+    Phase 2: Solve TSP for each driver (Routing QUBO)
+    """
+    if not drivers:
+        return {}
+    if not targets:
+        return {d: [game.depot_index] for d in drivers}
+    
+    print(f"  [VRP] Phase 1: Assigning {len(targets)} targets to {len(drivers)} drivers...")
+    assignment = solve_assignment_qubo(targets, drivers)
+    
+    print(f"  [VRP] Phase 2: Solving TSP for each driver...")
+    final_routes = {}
+    for driver, assigned_targets in assignment.items():
+        if assigned_targets:
+            route = solve_tsp_qubo_closed_loop(driver, assigned_targets)
+        else:
+            route = [game.depot_index]
+        final_routes[driver] = route
+        print(f"    {driver}: {len(assigned_targets)} targets -> Route length {len(route)}")
+    
+    return final_routes
 
 
 def solve_vrp_internally():
-    if game.status != "PLAYING": return {}
+    """Called whenever routes need recalculation."""
+    if game.status != "PLAYING":
+        return {}
+    
     targets = [d for d in game.destinations if d not in game.visited_destinations]
-    if not targets: return {aid: [game.depot_index] for aid in game.agents}
+    if not targets:
+        return {aid: [game.depot_index] for aid in game.agents}
     
     active_drivers = list(game.agents.keys())
-    if len(targets) > 12:
-        print("  [Warning] Targets > 12. Slicing for safety.")
-        targets = targets[:12]
-
-    final_routes = solve_full_vrp_qubo(targets, active_drivers)
+    
+    # Safety cap
+    if len(targets) > 15:
+        print("  [Warning] Too many targets, capping at 15.")
+        targets = targets[:15]
+    
+    final_routes = solve_vrp_two_phase(targets, active_drivers)
     game.suggested_routes = final_routes
     return final_routes
+
 
 # --- Background Task for CPU ---
 async def cpu_simulation_loop():
     while True:
-        await asyncio.sleep(2.5) # Slower movement
+        await asyncio.sleep(2.0)
         if game.status == "PLAYING":
             cpus = [a for a in game.agents.values() if a.is_cpu]
             updates = []
+            need_recalc = False
             
             for cpu in cpus:
                 route = game.suggested_routes.get(cpu.id, [])
-                if route:
-                    target_dest = route[0]
-                    if cpu.idx == target_dest: continue
-                    path = game.find_path(cpu.idx, target_dest)
-                    if len(path) > 1:
-                        next_node = path[1]
-                        game.move_player(cpu.id, next_node)
-                        updates.append({"id": cpu.id, "idx": next_node})
+                if not route:
+                    continue
+                
+                # Find next destination (skip visited ones and depot if not last)
+                target_dest = None
+                for r in route:
+                    if r == game.depot_index:
+                        # Only go to depot if it's the last remaining goal
+                        remaining = [d for d in game.destinations if d not in game.visited_destinations]
+                        if not remaining:
+                            target_dest = r
+                            break
+                    elif r not in game.visited_destinations:
+                        target_dest = r
+                        break
+                
+                if target_dest is None:
+                    continue
+                
+                if cpu.idx == target_dest:
+                    # Arrived at destination
+                    if target_dest in game.destinations:
+                        game.visited_destinations.add(target_dest)
+                        need_recalc = True
+                    continue
+                
+                path = game.find_path(cpu.idx, target_dest)
+                if len(path) > 1:
+                    next_node = path[1]
+                    old_idx = cpu.idx
+                    game.agents[cpu.id].idx = next_node
                     
-            if updates:
-                routes = solve_vrp_internally()
+                    # Check if landed on a destination
+                    if next_node in game.destinations and next_node not in game.visited_destinations:
+                        game.visited_destinations.add(next_node)
+                        need_recalc = True
+                    
+                    updates.append({"id": cpu.id, "idx": next_node})
+            
+            if updates or need_recalc:
+                routes = solve_vrp_internally() if need_recalc else game.suggested_routes
                 await manager.broadcast({
                     "type": "batch_update",
                     "updates": updates,
