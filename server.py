@@ -409,9 +409,9 @@ def solve_vrp_internally():
     active_drivers = list(game.agents.keys())
     
     # Safety cap
-    if len(targets) > 15:
-        print("  [Warning] Too many targets, capping at 15.")
-        targets = targets[:15]
+    if len(targets) > 20:
+        print("  [Warning] Too many targets, capping at 20.")
+        targets = targets[:20]
     
     final_routes = solve_vrp_two_phase(targets, active_drivers)
     game.suggested_routes = final_routes

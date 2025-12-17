@@ -26,56 +26,82 @@
     状況の変化（新たな配送依頼、渋滞、車両の故障など）に応じて、瞬時に全車両のルートを再計算します。
 2.  **マルチエージェント協調**:
     個々の車両が勝手に最短経路を選ぶのではなく、システム全体として最も効率が良いように「役割分担」と「経路選択」を同時に行います。
+3.  **確実な配送と帰還**:
+    全ての目的地を確実に訪問し、配送完了後は全エージェントがデポ（出発地点）へ帰還します。
 
-## 3. 技術的アプローチ: Full VRP QUBO
+## 3. 技術的アプローチ: 二段階QUBO最適化
 
 ![QUBO Optimization Concept](qubo_optimization_concept.png)
 
-従来の古典的なアプローチでは、計算量を減らすために「エリア分け（クラスタリング）」と「ルート探索（TSP）」を別々の工程として行うのが一般的でした。本プロジェクトでは、これらを統合し、**単一の巨大なQUBOモデル**として定式化しました。
+本プロジェクトでは、VRPを2つのサブ問題に分解し、それぞれをQUBOで解く**二段階最適化**アプローチを採用しました。
 
-### 3.1 決定変数 (Decision Variables)
-バイナリ変数 $x_{k,t,i}$ を定義します。
+| Phase | 問題 | 定式化 | 保証 |
+|-------|------|--------|------|
+| **Phase 1** | 割り当て (Clustering) | Assignment QUBO | 全目的地が必ず誰かに割り当てられる |
+| **Phase 2** | 巡回順序 (Routing) | Position-based TSP QUBO | 全目的地を1回ずつ訪問し、デポへ帰還 |
 
-- $k$: エージェントID ($1 \dots K$)
-- $t$: タイムステップ ($1 \dots T$)
-- $i$: 目的地ID ($1 \dots N$)
+---
 
-$$
-x_{k,t,i} = \begin{cases} 
-1 & \text{エージェント } k \text{ がステップ } t \text{ で目的地 } i \text{ を訪問する} \\
-0 & \text{訪問しない}
-\end{cases}
-$$
+### Phase 1: 割り当て問題 (Assignment QUBO)
 
-### 3.2 定式化 (Mathematical Formulation)
-最適化すべきハミルトニアン（エネルギー関数） $H$ は、制約項 $H_{\text{constraint}}$ と目的項 $H_{\text{objective}}$ の和で表されます。
+各目的地 $i$ を、どのドライバー $k$ が担当するかを決定します。
 
-$$ H = A \cdot H_{\text{constraint}} + B \cdot H_{\text{objective}} $$
-ここで $A, B$ は重み係数であり、制約を満たすために $A \gg B$ と設定します（本実装では $A=5000, B=1$）。
+**決定変数:**
+<div>
+$$ y_{k,i} \in \{0, 1\} $$
+</div>
 
-#### 1. 訪問制約 (Visit Constraint)
-全ての目的地 $i$ は、全エージェント・全ステップを通じて**必ず1回だけ**訪問されなければなりません One-Hot制約）。
+($y_{k,i} = 1$ ならドライバー $k$ が目的地 $i$ を担当)
 
-$$ H_{\text{visit}} = \sum_{i=1}^{N} \left( \sum_{k=1}^{K} \sum_{t=1}^{T} x_{k,t,i} - 1 \right)^2 $$
+**制約: 各目的地は必ず1人に割り当て (One-Hot)**
+<div>
+$$ H_{\text{assign}} = A \sum_{i=1}^{N} \left( \sum_{k=1}^{K} y_{k,i} - 1 \right)^2 $$
+</div>
 
-#### 2. 容量・排他制約 (Exclusivity Constraint)
-各エージェント $k$ は、あるステップ $t$ において、**最大で1箇所**しか訪問できません（分身不可）。
-本実装では、異なる2地点 $i, j$ が同時に選ばれることにペナルティを与えます。
+**目的: 割り当ての距離最小化 + 負荷分散**
+<div>
+$$ H_{\text{dist}} = B \sum_{k} \sum_{i} d(\text{pos}_k, i) \cdot y_{k,i} $$
+</div>
+<div>
+$$ H_{\text{balance}} = C \sum_{k} \sum_{i < j} y_{k,i} \cdot y_{k,j} $$
+</div>
 
-$$ H_{\text{capacity}} = \sum_{k=1}^{K} \sum_{t=1}^{T} \sum_{i < j} x_{k,t,i} x_{k,t,j} $$
+---
 
-これにより、$\sum_i x_{k,t,i} \le 1$ が誘導されます（何も訪問しないステップは許容されます）。
+### Phase 2: 巡回問題 (TSP QUBO - Closed Loop)
 
-#### 3. 目的関数: 総移動距離の最小化 (Minimize Distance)
-エージェントが移動する総距離を最小化します。
-これには「初期位置 ($\text{start}_k$) から最初の目的地への移動」と「目的地間の移動」が含まれます。
+各ドライバーに割り当てられた目的地群に対して、Position-based TSP を解きます。
 
-$$ H_{\text{dist}} = \sum_{k=1}^{K} \left[ \underbrace{\sum_{i=1}^{N} d(\text{start}_k, i) x_{k,0,i}}_{\text{Initial Move}} + \underbrace{\sum_{t=0}^{T-2} \sum_{i \neq j} d(i, j) x_{k,t,i} x_{k,t+1,j}}_{\text{Route Moves}} \right] $$
+**決定変数:**
+<div>
+$$ z_{i,p} \in \{0, 1\} $$
+</div>
 
-ここで、$d(i, j)$ は地点間のユークリッド距離です。第2項は、ステップ $t$ で $i$ にいて、ステップ $t+1$ で $j$ に移動する場合にのみ距離コストが発生する相互作用項（Quadratic Term）です。
+($z_{i,p} = 1$ なら目的地 $i$ を訪問順序 $p$ で訪れる)
 
-### 3.3 実装構成
-このモデルを `dimod.BinaryQuadraticModel` を用いて構築し、`OpenJij` の Simulated Annealing (SA) ソルバで解探索を行っています。リアルタイム性を維持するため、目的地数やステップ数を動的に調整しています。
+**制約1: 各目的地は1回だけ訪問 (Row One-Hot)**
+<div>
+$$ H_{\text{row}} = A \sum_{i=1}^{n} \left( \sum_{p=1}^{n} z_{i,p} - 1 \right)^2 $$
+</div>
+
+**制約2: 各順序には1つの目的地 (Column One-Hot)**
+<div>
+$$ H_{\text{col}} = A \sum_{p=1}^{n} \left( \sum_{i=1}^{n} z_{i,p} - 1 \right)^2 $$
+</div>
+
+**目的: 総移動距離の最小化 (帰還込み)**
+<div>
+$$ H_{\text{tsp}} = B \left[ \sum_{i} d(\text{start}, i) z_{i,0} + \sum_{p=0}^{n-2} \sum_{i \neq j} d(i, j) z_{i,p} z_{j,p+1} + \sum_{i} d(i, \text{depot}) z_{i,n-1} \right] $$
+</div>
+
+最終項 $d(i, \text{depot}) z_{i,n-1}$ により、最後の目的地からデポへの帰還コストが明示的に最小化されます。
+
+---
+
+### 実装構成
+- **言語**: Python (FastAPI Backend, Vanilla JS Frontend)
+- **ソルバ**: OpenJij (Simulated Annealing) + Dimod (BQM Construction)
+- **分割統治**: 大規模問題 (9目的地以上/ドライバー) は Greedy 法にフォールバック
 
 ## 4. デモンストレーション
 
@@ -83,7 +109,8 @@ $$ H_{\text{dist}} = \sum_{k=1}^{K} \left[ \underbrace{\sum_{i=1}^{N} d(\text{st
 
 - **Scenario**: センター（DEPOT）から出発する複数の配送トラック。
 - **Action**: 目的地はランダムに生成され、量子モデルが瞬時に最適ルートを割り当てます。
-- **Responsiveness**: エージェントが移動するたびに再計算が走り、例えば「Aさんが遅れているから、近くにいるBさんが代わりにその荷物を持つ」といった動的な最適化が可視化されます。
+- **Responsiveness**: エージェントが移動するたびに再計算が走り、動的な最適化が可視化されます。
+- **Completion**: 全配送完了後、全エージェントがデポへ帰還します。
 
 ## 5. 今後の展望
 
