@@ -31,22 +31,51 @@
 
 ![QUBO Optimization Concept](qubo_optimization_concept.png)
 
-従来の古典的なアプローチでは、計算量を減らすために「エリア分け（クラスタリング）」と「ルート探索（TSP）」を別々の工程として行うのが一般的でした。
-しかし、これでは「エリアの境界付近」で非効率が発生してしまいます。
+従来の古典的なアプローチでは、計算量を減らすために「エリア分け（クラスタリング）」と「ルート探索（TSP）」を別々の工程として行うのが一般的でした。本プロジェクトでは、これらを統合し、**単一の巨大なQUBOモデル**として定式化しました。
 
-本プロジェクトでは、**「誰が」**配送するかと、**「どの順序で」**配送するかを、**単一の巨大なQUBO（Quadratic Unconstrained Binary Optimization）モデル**として定式化しました。
+### 3.1 決定変数 (Decision Variables)
+バイナリ変数 $x_{k,t,i}$ を定義します。
 
-### 実装詳細
-- **言語**: Python (FastAPI Backend)
-- **ソルバ**: OpenJij (Simulated Annealing) / Dimod (BQM Construction)
-- **定式化**:
-    - **決定変数** $x_{k,t,i}$: エージェント $k$ が、ステップ $t$ において、目的地 $i$ を訪問するかどうか（0 or 1）。
-    - **目的関数**: 総移動距離の最小化。
-    - **制約条件**:
-        1. 全ての目的地は、必ず誰か1人によって1回だけ訪問されること。
-        2. 各ステップにおいて、各エージェントは1箇所しか訪問できないこと。
+- $k$: エージェントID ($1 \dots K$)
+- $t$: タイムステップ ($1 \dots T$)
+- $i$: 目的地ID ($1 \dots N$)
 
-これにより、古典コンピュータでは探索が困難な広大な解空間の中から、エネルギー地形の「谷底（最適解）」を量子アニーリング的な手法で探索します。
+$$
+x_{k,t,i} = \begin{cases} 
+1 & \text{エージェント } k \text{ がステップ } t \text{ で目的地 } i \text{ を訪問する} \\
+0 & \text{訪問しない}
+\end{cases}
+$$
+
+### 3.2 定式化 (Mathematical Formulation)
+最適化すべきハミルトニアン（エネルギー関数） $H$ は、制約項 $H_{\text{constraint}}$ と目的項 $H_{\text{objective}}$ の和で表されます。
+
+$$ H = A \cdot H_{\text{constraint}} + B \cdot H_{\text{objective}} $$
+ここで $A, B$ は重み係数であり、制約を満たすために $A \gg B$ と設定します（本実装では $A=5000, B=1$）。
+
+#### 1. 訪問制約 (Visit Constraint)
+全ての目的地 $i$ は、全エージェント・全ステップを通じて**必ず1回だけ**訪問されなければなりません One-Hot制約）。
+
+$$ H_{\text{visit}} = \sum_{i=1}^{N} \left( \sum_{k=1}^{K} \sum_{t=1}^{T} x_{k,t,i} - 1 \right)^2 $$
+
+#### 2. 容量・排他制約 (Exclusivity Constraint)
+各エージェント $k$ は、あるステップ $t$ において、**最大で1箇所**しか訪問できません（分身不可）。
+本実装では、異なる2地点 $i, j$ が同時に選ばれることにペナルティを与えます。
+
+$$ H_{\text{capacity}} = \sum_{k=1}^{K} \sum_{t=1}^{T} \sum_{i < j} x_{k,t,i} x_{k,t,j} $$
+
+これにより、$\sum_i x_{k,t,i} \le 1$ が誘導されます（何も訪問しないステップは許容されます）。
+
+#### 3. 目的関数: 総移動距離の最小化 (Minimize Distance)
+エージェントが移動する総距離を最小化します。
+これには「初期位置 ($\text{start}_k$) から最初の目的地への移動」と「目的地間の移動」が含まれます。
+
+$$ H_{\text{dist}} = \sum_{k=1}^{K} \left[ \underbrace{\sum_{i=1}^{N} d(\text{start}_k, i) x_{k,0,i}}_{\text{Initial Move}} + \underbrace{\sum_{t=0}^{T-2} \sum_{i \neq j} d(i, j) x_{k,t,i} x_{k,t+1,j}}_{\text{Route Moves}} \right] $$
+
+ここで、$d(i, j)$ は地点間のユークリッド距離です。第2項は、ステップ $t$ で $i$ にいて、ステップ $t+1$ で $j$ に移動する場合にのみ距離コストが発生する相互作用項（Quadratic Term）です。
+
+### 3.3 実装構成
+このモデルを `dimod.BinaryQuadraticModel` を用いて構築し、`OpenJij` の Simulated Annealing (SA) ソルバで解探索を行っています。リアルタイム性を維持するため、目的地数やステップ数を動的に調整しています。
 
 ## 4. デモンストレーション
 
