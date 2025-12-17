@@ -186,16 +186,18 @@
         }
 
         .control-row {
-            margin: 20px 0;
+            margin: 15px 0;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
             text-align: left;
         }
 
         label {
-            font-size: 14px;
+            font-size: 13px;
             color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
         }
 
         input[type=range] {
@@ -211,6 +213,7 @@
             cursor: pointer;
             font-weight: 600;
             width: 100%;
+            margin-top: 10px;
         }
 
         button.btn-secondary {
@@ -296,6 +299,14 @@
             <p id="lobby-count" style="color: #94a3b8; font-size: 13px; margin: 10px 0;">...</p>
 
             <div class="control-row">
+                <label>Map Scale (Nodes): <span id="nodes-val">80</span></label>
+                <input type="range" id="nodes-slider" min="30" max="150" value="80">
+            </div>
+            <div class="control-row">
+                <label>Delivery Targets: <span id="targets-val">8</span></label>
+                <input type="range" id="targets-slider" min="2" max="12" value="8">
+            </div>
+            <div class="control-row">
                 <label>Opponent AI Fleet: <span id="cpu-val">2</span></label>
                 <input type="range" id="cpu-slider" min="0" max="5" value="2">
             </div>
@@ -322,6 +333,12 @@
                 this.lobbyRegenBtn = document.getElementById('lobby-regen-btn');
                 this.cpuSlider = document.getElementById('cpu-slider');
                 this.cpuVal = document.getElementById('cpu-val');
+
+                this.nodesSlider = document.getElementById('nodes-slider');
+                this.nodesVal = document.getElementById('nodes-val');
+                this.targetsSlider = document.getElementById('targets-slider');
+                this.targetsVal = document.getElementById('targets-val');
+
                 this.regenBtn = document.getElementById('regen-btn');
                 this.connInd = document.getElementById('conn-indicator');
                 this.connToast = document.getElementById('conn-toast');
@@ -367,11 +384,21 @@
                 this.canvas.addEventListener('touchstart', e => this.handleClick(e), { passive: false });
 
                 this.cpuSlider.addEventListener('input', (e) => { this.cpuVal.textContent = e.target.value; });
+                this.nodesSlider.addEventListener('input', (e) => { this.nodesVal.textContent = e.target.value; });
+                this.targetsSlider.addEventListener('input', (e) => { this.targetsVal.textContent = e.target.value; });
+
                 this.startBtn.addEventListener('click', () => {
                     this.send({ type: "start_game", cpu_count: parseInt(this.cpuSlider.value) });
                 });
-                this.regenBtn.addEventListener('click', () => { this.send({ type: "regenerate", points: 100 }); });
-                this.lobbyRegenBtn.addEventListener('click', () => { this.send({ type: "regenerate", points: 100 }); });
+                this.regenBtn.addEventListener('click', () => { this.send({ type: "regenerate" }); }); // Sidebar default
+
+                this.lobbyRegenBtn.addEventListener('click', () => {
+                    this.send({
+                        type: "regenerate",
+                        points: parseInt(this.nodesSlider.value),
+                        destinations: parseInt(this.targetsSlider.value)
+                    });
+                });
 
                 this.connectWebSocket();
                 this.loop();

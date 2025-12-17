@@ -103,7 +103,7 @@ class GameState:
 
     def regenerate(self, points, destinations):
         self.num_points = points
-        self.num_destinations = 8 # Force small number for VRP safety
+        self.num_destinations = destinations
         self.generate_map()
         self.status = "LOBBY"
         for aid, ag in self.agents.items():
@@ -375,8 +375,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 })
                 
             elif msg["type"] == "regenerate":
-                p_count = int(msg.get("points", 100))
-                game.regenerate(p_count, 8) 
+                p_count = int(msg.get("points", 80))
+                d_count = int(msg.get("destinations", 8))
+                game.regenerate(p_count, d_count) 
                 await manager.broadcast({
                     "type": "init",
                     "status": game.status,
