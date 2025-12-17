@@ -1,0 +1,8 @@
+
+fastapi
+uvicorn
+numpy
+openjij
+dimod
+websockets
+pydantic

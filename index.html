@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Logistics Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #0f172a;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+        }
+
+        #app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #sidebar {
+            width: 320px;
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            z-index: 20;
+            box-shadow: 4px 0 10px rgba(0, 0, 0, 0.2);
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #0f172a;
+            cursor: grab;
+        }
+
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .title-area h1 {
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .title-area p {
+            color: #94a3b8;
+            font-size: 13px;
+            margin-top: 5px;
+        }
+
+        .control-group {
+            margin-top: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .stat-item {
+            background: #0f172a;
+            padding: 15px;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid #334155;
+        }
+
+        .stat-label {
+            color: #94a3b8;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 18px;
+            color: #38bdf8;
+            font-weight: 600;
+        }
+
+        .btn {
+            background: #38bdf8;
+            color: #0f172a;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            background: #0ea5e9;
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        /* Lobby Overlay */
+        #lobby-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            transition: opacity 0.5s;
+        }
+
+        .lobby-box {
+            background: #1e293b;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            border: 1px solid #334155;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        h2 {
+            margin: 0 0 20px;
+            font-weight: 700;
+            color: #38bdf8;
+        }
+
+        .player-list {
+            margin: 20px 0;
+            text-align: left;
+            background: #0f172a;
+            padding: 10px;
+            border-radius: 8px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .player-item {
+            padding: 8px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .control-row {
+            margin: 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            text-align: left;
+        }
+
+        label {
+            font-size: 14px;
+            color: #94a3b8;
+        }
+
+        input[type=range] {
+            width: 100%;
+        }
+
+        button.start-btn {
+            background: #38bdf8;
+            color: #0f172a;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        button.btn-secondary {
+            background: #334155;
+            color: #f1f5f9;
+            border: 1px solid #475569;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #334155;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            z-index: 200;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app-container">
+        <!-- Sidebar -->
+        <aside id="sidebar">
+            <div class="title-area">
+                <h1>Quantum Logistics</h1>
+                <p>Centralized AI Routing Simulator</p>
+                <div id="conn-indicator" style="font-size: 12px; color: #94a3b8; margin-top: 5px;">Connecting...</div>
+            </div>
+
+            <div class="control-group">
+                <button id="regen-btn" class="btn" style="width:100%; margin-bottom: 10px;">Regenerate Site</button>
+
+                <div class="stat-item">
+                    <span class="stat-label">Active Fleet</span>
+                    <span class="stat-value" id="agent-count-val">0</span>
+                </div>
+
+                <div class="stat-item" style="flex-direction:column; align-items:flex-start; gap:8px;">
+                    <div style="display:flex; justify-content:space-between; width:100%;">
+                        <span class="stat-label">Delivery Progress</span>
+                        <span class="stat-value" id="progress-val" style="font-size:14px;">0%</span>
+                    </div>
+                    <div style="width:100%; height:6px; background:#334155; border-radius:3px; overflow:hidden;">
+                        <div id="progress-bar"
+                            style="width:0%; height:100%; background:#22c55e; transition:width 0.5s;"></div>
+                    </div>
+                    <span style="font-size:11px; color:#64748b; margin-top:2px;">Objective: Clear all optimal
+                        clusters.</span>
+                </div>
+            </div>
+
+            <div style="margin-top:auto; font-size:11px; color:#475569; line-height:1.5;">
+                <p><strong>Scenario:</strong><br>Agents start from a centralized Depot. Quantum Annealing (QUBO)
+                    calculates the most efficient TSP routes for each assigned cluster to minimize total fleet time.</p>
+            </div>
+        </aside>
+
+        <!-- Main Canvas -->
+        <main id="canvas-container">
+            <canvas id="map-canvas"></canvas>
+        </main>
+    </div>
+
+    <!-- Lobby Overlay -->
+    <div id="lobby-overlay">
+        <div class="lobby-box">
+            <h2>Operations Center</h2>
+            <p style="color: #94a3b8; font-size: 14px;">Waiting for fleet connection...</p>
+
+            <div class="player-list" id="lobby-list"></div>
+            <p id="lobby-count" style="color: #94a3b8; font-size: 13px; margin: 10px 0;">...</p>
+
+            <div class="control-row">
+                <label>Opponent AI Fleet: <span id="cpu-val">2</span></label>
+                <input type="range" id="cpu-slider" min="0" max="5" value="2">
+            </div>
+
+            <button class="btn-secondary" id="lobby-regen-btn">Redesign Network</button>
+            <button class="start-btn" id="start-btn">Deploy Fleet (Start)</button>
+        </div>
+    </div>
+
+    <div id="conn-toast" class="connection-status">Connected</div>
+
+    <script>
+        class App {
+            constructor() {
+                this.canvas = document.getElementById('map-canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.container = document.getElementById('canvas-container');
+
+                // UI References
+                this.lobbyOverlay = document.getElementById('lobby-overlay');
+                this.lobbyList = document.getElementById('lobby-list');
+                this.lobbyCount = document.getElementById('lobby-count');
+                this.startBtn = document.getElementById('start-btn');
+                this.lobbyRegenBtn = document.getElementById('lobby-regen-btn');
+                this.cpuSlider = document.getElementById('cpu-slider');
+                this.cpuVal = document.getElementById('cpu-val');
+                this.regenBtn = document.getElementById('regen-btn');
+                this.connInd = document.getElementById('conn-indicator');
+                this.connToast = document.getElementById('conn-toast');
+                this.progressVal = document.getElementById('progress-val');
+                this.progressBar = document.getElementById('progress-bar');
+
+                // Game State
+                this.points = [];
+                this.edges = {};
+                this.destinations = [];
+                this.visitedDestinations = new Set();
+                this.depotIndex = -1;
+                this.agents = {};
+                this.myId = "p_" + Math.random().toString(36).substr(2, 5);
+                this.allRoutes = {};
+                this.hoverIdx = -1;
+                this.gameActive = false;
+
+                this.config = {
+                    pointRadius: 5,
+                    colors: {
+                        bg: '#0f172a',
+                        road: 'rgba(255,255,255,0.03)',
+                        point: '#334155',
+                        destination: '#ef4444',
+                        destinationVisited: '#475569',
+                        depot: '#22c55e',
+                        validMove: 'rgba(56, 189, 248, 0.5)',
+                        suggestion: 'rgba(56, 189, 248, 0.8)',
+                        grid: 'rgba(255,255,255,0.02)'
+                    }
+                };
+
+                this.init();
+            }
+
+            init() {
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+
+                this.canvas.addEventListener('mousemove', e => this.handleMove(e));
+                this.canvas.addEventListener('mousedown', e => this.handleClick(e));
+                this.canvas.addEventListener('touchstart', e => this.handleClick(e), { passive: false });
+
+                this.cpuSlider.addEventListener('input', (e) => { this.cpuVal.textContent = e.target.value; });
+                this.startBtn.addEventListener('click', () => {
+                    this.send({ type: "start_game", cpu_count: parseInt(this.cpuSlider.value) });
+                });
+                this.regenBtn.addEventListener('click', () => { this.send({ type: "regenerate", points: 100 }); });
+                this.lobbyRegenBtn.addEventListener('click', () => { this.send({ type: "regenerate", points: 100 }); });
+
+                this.connectWebSocket();
+                this.loop();
+            }
+
+            connectWebSocket() {
+                let protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                let host = window.location.host;
+                if (!host || window.location.protocol === 'file:') host = 'localhost:8000';
+
+                const url = `${protocol}//${host}/ws/${this.myId}`;
+                this.connInd.textContent = "Connecting..."; this.connInd.style.color = "#fbbf24";
+                this.ws = new WebSocket(url);
+                this.ws.onopen = () => { this.connInd.textContent = "Online"; this.connInd.style.color = "#4ade80"; this.showToast("Connected"); };
+                this.ws.onmessage = (event) => { try { this.handleMessage(JSON.parse(event.data)); } catch (e) { } };
+                this.ws.onclose = () => { this.connInd.textContent = "Offline"; this.connInd.style.color = "#ef4444"; this.showToast("Disconnected", true); setTimeout(() => this.connectWebSocket(), 3000); };
+            }
+
+            send(data) { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(data)); }
+            showToast(msg, err = false) { this.connToast.textContent = msg; this.connToast.style.color = err ? '#ef4444' : '#fff'; this.connToast.style.opacity = 1; setTimeout(() => this.connToast.style.opacity = 0, 2000); }
+
+            updateProgress() {
+                if (this.destinations.length === 0) return;
+                const pct = Math.round((this.visitedDestinations.size / this.destinations.length) * 100);
+                this.progressVal.textContent = pct + "%";
+                this.progressBar.style.width = pct + "%";
+            }
+
+            handleMessage(msg) {
+                if (msg.type === "init") {
+                    this.points = msg.points; this.edges = msg.edges;
+                    this.destinations = msg.destinations; this.visitedDestinations = new Set(msg.visited);
+                    this.depotIndex = msg.depot; this.agents = {};
+                    msg.players.forEach(p => this.updateAgentLocal(p));
+
+                    if (msg.status === "LOBBY") {
+                        this.lobbyOverlay.style.display = 'flex'; this.lobbyOverlay.style.opacity = 1;
+                        this.gameActive = false; this.updateLobbyList(); this.allRoutes = {};
+                    } else {
+                        this.lobbyOverlay.style.display = 'none'; this.gameActive = true;
+                    }
+                    this.updateProgress();
+
+                } else if (msg.type === "player_join") {
+                    this.updateAgentLocal(msg.player); this.updateLobbyList();
+
+                } else if (msg.type === "player_leave") {
+                    delete this.agents[msg.id]; this.updateLobbyList();
+
+                } else if (msg.type === "game_start") {
+                    this.lobbyOverlay.style.opacity = '0'; setTimeout(() => { this.lobbyOverlay.style.display = 'none' }, 500);
+                    this.gameActive = true;
+                    msg.players.forEach(p => this.updateAgentLocal(p));
+                    this.handleRoutes(msg.routes);
+                    this.showToast("Fleet Deployed");
+
+                } else if (msg.type === "update_pos") {
+                    const agent = this.agents[msg.id];
+                    if (agent && this.points[msg.idx]) { agent.idx = msg.idx; agent.targetPos = { x: this.points[msg.idx].x, y: this.points[msg.idx].y }; }
+                    if (msg.visited) { this.visitedDestinations = new Set(msg.visited); this.updateProgress(); }
+                    if (msg.routes) this.handleRoutes(msg.routes);
+
+                } else if (msg.type === "batch_update") {
+                    msg.updates.forEach(u => {
+                        const agent = this.agents[u.id];
+                        if (agent && this.points[u.idx]) { agent.idx = u.idx; agent.targetPos = { x: this.points[u.idx].x, y: this.points[u.idx].y }; }
+                    });
+                    if (msg.visited) { this.visitedDestinations = new Set(msg.visited); this.updateProgress(); }
+                    if (msg.routes) this.handleRoutes(msg.routes);
+                }
+                document.getElementById('agent-count-val').innerText = Object.keys(this.agents).length;
+            }
+
+            updateAgentLocal(pData) {
+                const existing = this.agents[pData.id];
+                const newPos = this.points[pData.idx];
+                if (!newPos) return;
+                if (existing) {
+                    existing.targetPos = { x: newPos.x, y: newPos.y }; existing.idx = pData.idx;
+                    existing.is_cpu = pData.is_cpu; existing.color = pData.color;
+                } else {
+                    this.agents[pData.id] = { ...pData, currentPos: { x: newPos.x, y: newPos.y }, targetPos: { x: newPos.x, y: newPos.y } };
+                }
+            }
+
+            updateLobbyList() {
+                if (this.gameActive) return;
+                this.lobbyList.innerHTML = '';
+                const list = Object.values(this.agents);
+                this.lobbyCount.textContent = `${list.length} Agents Connected`;
+                list.forEach(p => {
+                    const div = document.createElement('div'); div.className = 'player-item';
+                    div.innerHTML = `<div class="color-dot" style="background:${p.color}"></div><span>${p.id === this.myId ? p.id + " (You)" : p.id}</span>`;
+                    this.lobbyList.appendChild(div);
+                });
+            }
+
+            handleRoutes(routes) {
+                this.allRoutes = {};
+                Object.keys(routes).forEach(aid => {
+                    const route = routes[aid]; const agent = this.agents[aid];
+                    if (!agent) return;
+                    const pathSegments = []; let prev = agent.idx;
+                    route.forEach(idx => {
+                        const path = this.findPath(prev, idx);
+                        for (let k = 0; k < path.length - 1; k++) { pathSegments.push([path[k], path[k + 1]]); }
+                        prev = idx;
+                    });
+                    this.allRoutes[aid] = pathSegments;
+                });
+            }
+
+            resize() { this.canvas.width = this.container.clientWidth; this.canvas.height = this.container.clientHeight; }
+            getPos(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const cx = e.touches ? e.touches[0].clientX : e.clientX;
+                const cy = e.touches ? e.touches[0].clientY : e.clientY;
+                return { x: cx - rect.left, y: cy - rect.top };
+            }
+
+            findPath(startIdx, endIdx) {
+                if (startIdx === endIdx) return [startIdx];
+                const dist = new Array(this.points.length).fill(Infinity);
+                const prev = new Array(this.points.length).fill(null);
+                const visited = new Set();
+                const pq = [[0, startIdx]]; dist[startIdx] = 0;
+                while (pq.length > 0) {
+                    pq.sort((a, b) => a[0] - b[0]); const [d, u] = pq.shift();
+                    if (u === endIdx) break; if (visited.has(u)) continue; visited.add(u);
+                    for (let v of (this.edges[u] || [])) {
+                        if (visited.has(v)) continue;
+                        const w = Math.hypot(this.points[u].x - this.points[v].x, this.points[u].y - this.points[v].y);
+                        if (d + w < dist[v]) { dist[v] = d + w; prev[v] = u; pq.push([d + w, v]); }
+                    }
+                }
+                const path = []; let u = endIdx;
+                if (prev[u] !== null || u === startIdx) { while (u !== null) { path.unshift(u); u = prev[u]; } }
+                return (path.length > 0 && path[0] === startIdx) ? path : [startIdx, endIdx];
+            }
+
+            handleMove(e) {
+                if (!this.gameActive || this.points.length === 0) return;
+                const pos = this.getPos(e); let best = this.config.pointRadius * 3; let hover = -1;
+                this.points.forEach((p, i) => { const d = Math.hypot(p.x - pos.x, p.y - pos.y); if (d < best) { best = d; hover = i; } });
+                this.hoverIdx = hover;
+                const me = this.agents[this.myId];
+                if (me && hover !== -1) {
+                    const neighbors = this.edges[me.idx] || []; this.canvas.style.cursor = neighbors.includes(hover) ? 'pointer' : 'default';
+                } else { this.canvas.style.cursor = 'default'; }
+            }
+
+            handleClick(e) {
+                e.preventDefault(); if (!this.gameActive || this.hoverIdx === -1) return;
+                const me = this.agents[this.myId];
+                if (!me) return;
+                const neighbors = this.edges[me.idx] || [];
+                if (neighbors.includes(this.hoverIdx)) { this.send({ type: "move", target: this.hoverIdx }); }
+            }
+
+            updateAgents() {
+                const speed = 0.05;
+                Object.values(this.agents).forEach(agent => {
+                    const dx = agent.targetPos.x - agent.currentPos.x; const dy = agent.targetPos.y - agent.currentPos.y;
+                    if (Math.hypot(dx, dy) > 1) { agent.currentPos.x += dx * speed; agent.currentPos.y += dy * speed; }
+                    else { agent.currentPos.x = agent.targetPos.x; agent.currentPos.y = agent.targetPos.y; }
+                });
+            }
+
+            loop() { this.updateAgents(); this.draw(); requestAnimationFrame(() => this.loop()); }
+
+            draw() {
+                const ctx = this.ctx; const w = this.canvas.width; const h = this.canvas.height;
+                ctx.fillStyle = this.config.colors.bg; ctx.fillRect(0, 0, w, h);
+
+                // Grid
+                ctx.strokeStyle = this.config.colors.grid; ctx.lineWidth = 1; ctx.beginPath();
+                for (let x = 0; x < w; x += 50) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+                for (let y = 0; y < h; y += 50) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+                ctx.stroke();
+
+                // Roads
+                ctx.lineWidth = 1; ctx.strokeStyle = this.config.colors.road; ctx.beginPath();
+                for (let u in this.edges) {
+                    u = parseInt(u); if (!this.points[u]) continue;
+                    const p1 = this.points[u];
+                    this.edges[u].forEach(v => { if (u < v && this.points[v]) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(this.points[v].x, this.points[v].y); } });
+                }
+                ctx.stroke();
+
+                // Routes
+                if (this.allRoutes) {
+                    Object.keys(this.allRoutes).forEach(aid => {
+                        const path = this.allRoutes[aid]; const agent = this.agents[aid]; if (!path || !agent) return;
+                        ctx.lineWidth = 3;
+                        path.forEach((edge, i) => {
+                            const alpha = Math.max(0, 1.0 - (i / path.length) * 3.5); if (alpha <= 0) return;
+                            ctx.globalAlpha = alpha; ctx.strokeStyle = agent.color;
+                            if (this.points[edge[0]] && this.points[edge[1]]) {
+                                ctx.beginPath(); ctx.moveTo(this.points[edge[0]].x, this.points[edge[0]].y);
+                                ctx.lineTo(this.points[edge[1]].x, this.points[edge[1]].y); ctx.stroke();
+                            }
+                        });
+                        if (path.length > 0) {
+                            const edge = path[0]; const p1 = this.points[edge[0]]; const p2 = this.points[edge[1]];
+                            if (p1 && p2) {
+                                ctx.globalAlpha = 1.0; ctx.fillStyle = agent.color;
+                                const mx = (p1.x + p2.x) / 2; const my = (p1.y + p2.y) / 2; const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                                ctx.save(); ctx.translate(mx, my); ctx.rotate(angle); ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-4, -4); ctx.lineTo(-4, 4); ctx.fill(); ctx.restore();
+                            }
+                        }
+                        ctx.globalAlpha = 1.0;
+                    });
+                }
+
+                // Points
+                this.points.forEach((p, i) => {
+                    let color = this.config.colors.point; let radius = this.config.pointRadius;
+                    let isDepot = (i === this.depotIndex);
+                    if (isDepot) { color = this.config.colors.depot; radius = 12; }
+                    else if (this.destinations.includes(i)) {
+                        color = this.visitedDestinations.has(i) ? this.config.colors.destinationVisited : this.config.colors.destination;
+                        if (!this.visitedDestinations.has(i)) radius = 8;
+                    }
+                    if (i === this.hoverIdx) { radius *= 1.3; ctx.shadowBlur = 10; ctx.shadowColor = 'white'; } else ctx.shadowBlur = 0;
+
+                    ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+
+                    if (isDepot) {
+                        ctx.fillStyle = '#4ade80'; ctx.font = 'bold 11px Inter'; ctx.textAlign = 'center';
+                        ctx.fillText("DEPOT", p.x, p.y - 18);
+                    }
+                });
+
+                // Agents
+                Object.values(this.agents).forEach(agent => {
+                    ctx.beginPath(); ctx.arc(agent.currentPos.x, agent.currentPos.y, 9, 0, Math.PI * 2);
+                    ctx.fillStyle = agent.color; ctx.shadowBlur = 10; ctx.shadowColor = agent.color; ctx.fill(); ctx.shadowBlur = 0;
+                    if (agent.id === this.myId) { ctx.lineWidth = 2; ctx.strokeStyle = 'white'; ctx.stroke(); }
+                    ctx.fillStyle = '#fff'; ctx.font = '10px Inter'; ctx.textAlign = 'center';
+                    const label = agent.is_cpu ? "CPU" : agent.id.substr(0, 4);
+                    ctx.fillText(label, agent.currentPos.x, agent.currentPos.y - 12);
+                });
+            }
+        }
+        if (document.readyState === 'complete') new App(); else window.addEventListener('load', () => new App());
+    </script>
+</body>
+
+</html>
