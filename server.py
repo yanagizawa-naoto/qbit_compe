@@ -205,7 +205,7 @@ def solve_full_vrp_qubo(targets: List[int], active_drivers: List[str]) -> Dict[s
     def var(k, t, i): return f"x_{k}_{t}_{i}"
     
     A = 5000.0
-    B = 1.0
+    B = 10.0
     
     # Constraints are same: Visit Once, No Multitasking
     for i in range(num_targets):
